@@ -1,16 +1,27 @@
 import { useState, useEffect } from "react";
 
-var STORAGE_KEY = "house-checklist";
+var STORAGE_KEY = "house-checklist-multi";
 
-function loadState() {
+function loadAll() {
   try {
     var saved = localStorage.getItem(STORAGE_KEY);
-    return saved ? JSON.parse(saved) : {};
-  } catch (e) { return {}; }
+    return saved ? JSON.parse(saved) : null;
+  } catch (e) { return null; }
 }
 
-function saveState(state) {
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (e) {}
+function saveAll(data) {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); } catch (e) {}
+}
+
+function newHouseState(name) {
+  return {
+    id: Date.now().toString(),
+    propertyName: name || "",
+    checked: {},
+    notes: {},
+    severities: {},
+    collapsed: {},
+  };
 }
 
 var SECTIONS = [
@@ -186,20 +197,84 @@ var SEVERITY = {
 };
 
 export default function HouseHuntingChecklist() {
-  var saved = loadState();
-  var [checked,     setChecked]    = useState(saved.checked || {});
-  var [notes,       setNotes]      = useState(saved.notes || {});
+  var stored = loadAll();
+  var initialHouses = (stored && stored.houses && stored.houses.length > 0) ? stored.houses : [newHouseState("")];
+  var initialActive = (stored && stored.activeId) ? stored.activeId : initialHouses[0].id;
+
+  var [houses, setHouses] = useState(initialHouses);
+  var [activeId, setActiveId] = useState(initialActive);
+  var [showPicker, setShowPicker] = useState(false);
+  var [newName, setNewName] = useState("");
+
+  var house = houses.find(function(h) { return h.id === activeId; }) || houses[0];
+
+  var [checked,     setChecked]    = useState(house.checked);
+  var [notes,       setNotes]      = useState(house.notes);
   var [editingNote, setEditingNote]= useState(null);
   var [noteText,    setNoteText]   = useState("");
-  var [collapsed,   setCollapsed]  = useState(saved.collapsed || {});
-  var [severities,  setSeverities] = useState(saved.severities || {});
+  var [collapsed,   setCollapsed]  = useState(house.collapsed);
+  var [severities,  setSeverities] = useState(house.severities);
   var [filter,      setFilter]     = useState("all");
-  var [propertyName, setPropertyName] = useState(saved.propertyName || "");
+  var [propertyName, setPropertyName] = useState(house.propertyName);
   var [editingName, setEditingName] = useState(false);
 
   useEffect(function() {
-    saveState({ checked: checked, notes: notes, collapsed: collapsed, severities: severities, propertyName: propertyName });
+    var updated = houses.map(function(h) {
+      if (h.id === activeId) {
+        return Object.assign({}, h, {
+          checked: checked,
+          notes: notes,
+          collapsed: collapsed,
+          severities: severities,
+          propertyName: propertyName,
+        });
+      }
+      return h;
+    });
+    setHouses(updated);
+    saveAll({ houses: updated, activeId: activeId });
   }, [checked, notes, collapsed, severities, propertyName]);
+
+  var switchHouse = function(id) {
+    var target = houses.find(function(h) { return h.id === id; });
+    if (target) {
+      setActiveId(id);
+      setChecked(target.checked);
+      setNotes(target.notes);
+      setCollapsed(target.collapsed);
+      setSeverities(target.severities);
+      setPropertyName(target.propertyName);
+      setFilter("all");
+      saveAll({ houses: houses, activeId: id });
+    }
+    setShowPicker(false);
+  };
+
+  var addHouse = function() {
+    var name = newName.trim();
+    if (!name) return;
+    var h = newHouseState(name);
+    var updated = houses.concat([h]);
+    setHouses(updated);
+    setNewName("");
+    saveAll({ houses: updated, activeId: h.id });
+    switchHouse(h.id);
+  };
+
+  var deleteHouse = function(id, e) {
+    e.stopPropagation();
+    if (houses.length <= 1) {
+      window.alert("You need at least one house.");
+      return;
+    }
+    if (!window.confirm("Delete this house and all its data?")) return;
+    var updated = houses.filter(function(h) { return h.id !== id; });
+    setHouses(updated);
+    if (id === activeId) {
+      switchHouse(updated[0].id);
+    }
+    saveAll({ houses: updated, activeId: updated[0].id });
+  };
 
   var toggleItem    = function(id) { setChecked(function(p) { var n = Object.assign({}, p); n[id] = !n[id]; return n; }); };
   var toggleSection = function(id) { setCollapsed(function(p) { var n = Object.assign({}, p); n[id] = !n[id]; return n; }); };
@@ -240,10 +315,9 @@ export default function HouseHuntingChecklist() {
     });
   }).filter(function(s) { return s.items.length > 0; });
 
-  var resetAll = function() {
-    if (window.confirm("Reset all progress for the next house?")) {
-      setChecked({}); setNotes({}); setSeverities({}); setCollapsed({}); setPropertyName("");
-      localStorage.removeItem(STORAGE_KEY);
+  var resetHouse = function() {
+    if (window.confirm("Reset all progress for this house?")) {
+      setChecked({}); setNotes({}); setSeverities({}); setCollapsed({});
     }
   };
 
@@ -274,26 +348,31 @@ export default function HouseHuntingChecklist() {
     URL.revokeObjectURL(url);
   };
 
+  var getProgress = function(h) {
+    var done = Object.values(h.checked).filter(Boolean).length;
+    return Math.round((done / totalItems) * 100);
+  };
+
   var S = {
-    page:       { minHeight:"100vh", background:"#0d1117", color:"#c9d1d9", fontFamily:"'Courier New',monospace", padding:0 },
-    header:     { background:"linear-gradient(135deg,#161b22 0%,#0d1117 100%)", borderBottom:"1px solid #21262d", padding:"32px 40px 24px", position:"sticky", top:0, zIndex:100 },
+    page:       { minHeight:"100vh", background:"#0d1117", color:"#c9d1d9", fontFamily:"'Segoe UI','Helvetica Neue',Arial,sans-serif", padding:0 },
+    header:     { background:"linear-gradient(135deg,#161b22 0%,#0d1117 100%)", borderBottom:"1px solid #21262d", padding:"28px 28px 22px", position:"sticky", top:0, zIndex:100 },
     hRow:       { display:"flex", justifyContent:"space-between", alignItems:"flex-start", flexWrap:"wrap", gap:16 },
-    hTitle:     { display:"flex", alignItems:"center", gap:12, marginBottom:4 },
-    h1:         { margin:0, fontSize:22, fontWeight:700, color:"#f0f6fc", letterSpacing:"0.04em" },
-    subtitle:   { margin:0, fontSize:12, color:"#8b949e", paddingLeft:34 },
-    propName:   { margin:"6px 0 0 34px", fontSize:13, color:"#00ff9d", cursor:"pointer", background:"none", border:"none", fontFamily:"inherit", padding:0, letterSpacing:"0.03em" },
-    propInput:  { margin:"6px 0 0 34px", fontSize:13, color:"#00ff9d", background:"#0d1117", border:"1px solid #30363d", borderRadius:4, fontFamily:"inherit", padding:"4px 8px", outline:"none", width:320, maxWidth:"70vw" },
+    hTitle:     { display:"flex", alignItems:"center", gap:12, marginBottom:6 },
+    h1:         { margin:0, fontSize:26, fontWeight:700, color:"#f0f6fc", letterSpacing:"0.02em" },
+    subtitle:   { margin:0, fontSize:15, color:"#8b949e", paddingLeft:38 },
+    propName:   { margin:"6px 0 0 38px", fontSize:16, color:"#00ff9d", cursor:"pointer", background:"none", border:"none", fontFamily:"inherit", padding:0, letterSpacing:"0.02em" },
+    propInput:  { margin:"6px 0 0 38px", fontSize:16, color:"#00ff9d", background:"#0d1117", border:"1px solid #30363d", borderRadius:6, fontFamily:"inherit", padding:"8px 12px", outline:"none", width:340, maxWidth:"70vw" },
     filterRow:  { display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" },
-    content:    { padding:"24px 40px", maxWidth:900, margin:"0 auto" },
-    secHeader:  function(color, isCollapsed) { return { display:"flex", alignItems:"center", gap:12, padding:"12px 16px", background:"#161b22", border:"1px solid #21262d", borderLeft:"3px solid " + color, borderRadius:isCollapsed?"6px":"6px 6px 0 0", cursor:"pointer", userSelect:"none" }; },
-    secBody:    { border:"1px solid #21262d", borderTop:"none", borderRadius:"0 0 6px 6px", overflow:"hidden" },
-    itemRow:    function(isDone, idx) { return { display:"flex", alignItems:"flex-start", gap:12, padding:"11px 16px", background:isDone?"#161b22":"#0d1117", borderTop:idx>0?"1px solid #161b22":"none", cursor:"pointer" }; },
-    checkbox:   function(isDone, color) { return { width:16, height:16, border:"1.5px solid " + (isDone?color:"#30363d"), borderRadius:3, background:isDone?color:"transparent", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0, marginTop:2, transition:"all 0.15s" }; },
-    itemText:   function(isDone) { return { fontSize:13, color:isDone?"#8b949e":"#c9d1d9", textDecoration:isDone?"line-through":"none", flex:1, lineHeight:1.5, wordBreak:"break-word", minWidth:0 }; },
-    noteRow:    { background:"#161b22", borderTop:"1px solid #21262d", padding:"8px 16px 8px 44px", fontSize:12, color:"#8b949e", fontStyle:"italic", lineHeight:1.5 },
+    content:    { padding:"24px 28px", maxWidth:960, margin:"0 auto" },
+    secHeader:  function(color, isCollapsed) { return { display:"flex", alignItems:"center", gap:14, padding:"16px 20px", background:"#161b22", border:"1px solid #21262d", borderLeft:"4px solid " + color, borderRadius:isCollapsed?"8px":"8px 8px 0 0", cursor:"pointer", userSelect:"none" }; },
+    secBody:    { border:"1px solid #21262d", borderTop:"none", borderRadius:"0 0 8px 8px", overflow:"hidden" },
+    itemRow:    function(isDone, idx) { return { display:"flex", alignItems:"flex-start", gap:14, padding:"14px 20px", background:isDone?"#161b22":"#0d1117", borderTop:idx>0?"1px solid #161b22":"none", cursor:"pointer" }; },
+    checkbox:   function(isDone, color) { return { width:22, height:22, border:"2px solid " + (isDone?color:"#30363d"), borderRadius:4, background:isDone?color:"transparent", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0, marginTop:1, transition:"all 0.15s" }; },
+    itemText:   function(isDone) { return { fontSize:16, color:isDone?"#8b949e":"#e6edf3", textDecoration:isDone?"line-through":"none", flex:1, lineHeight:1.6, wordBreak:"break-word", minWidth:0 }; },
+    noteRow:    { background:"#161b22", borderTop:"1px solid #21262d", padding:"10px 20px 10px 56px", fontSize:14, color:"#8b949e", fontStyle:"italic", lineHeight:1.5 },
     modal:      { position:"fixed", inset:0, background:"rgba(0,0,0,0.7)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:200 },
-    modalBox:   { background:"#161b22", border:"1px solid #30363d", borderRadius:8, padding:24, width:480, maxWidth:"90vw" },
-    textarea:   { width:"100%", minHeight:120, background:"#0d1117", border:"1px solid #30363d", borderRadius:4, color:"#c9d1d9", fontFamily:"inherit", fontSize:13, padding:12, resize:"vertical", outline:"none", boxSizing:"border-box", lineHeight:1.5 },
+    modalBox:   { background:"#161b22", border:"1px solid #30363d", borderRadius:10, padding:28, width:520, maxWidth:"92vw" },
+    textarea:   { width:"100%", minHeight:140, background:"#0d1117", border:"1px solid #30363d", borderRadius:6, color:"#c9d1d9", fontFamily:"inherit", fontSize:15, padding:14, resize:"vertical", outline:"none", boxSizing:"border-box", lineHeight:1.6 },
   };
 
   var filterBtn = function(f) {
@@ -301,8 +380,8 @@ export default function HouseHuntingChecklist() {
       background:    filter===f?"#21262d":"transparent",
       border:        "1px solid " + (filter===f?"#30363d":"transparent"),
       color:         filter===f?"#f0f6fc":"#8b949e",
-      padding:       "4px 10px", borderRadius:4, cursor:"pointer",
-      fontSize:11,   letterSpacing:"0.05em", textTransform:"uppercase",
+      padding:       "7px 14px", borderRadius:6, cursor:"pointer",
+      fontSize:13,   letterSpacing:"0.04em", textTransform:"uppercase",
       fontFamily:"inherit",
     };
   };
@@ -310,8 +389,8 @@ export default function HouseHuntingChecklist() {
   var actionBtn = function(extra) {
     return Object.assign({
       background:"transparent", border:"1px solid #30363d", color:"#8b949e",
-      padding:"4px 10px", borderRadius:4, cursor:"pointer",
-      fontSize:11, letterSpacing:"0.05em", textTransform:"uppercase",
+      padding:"7px 14px", borderRadius:6, cursor:"pointer",
+      fontSize:13, letterSpacing:"0.04em", textTransform:"uppercase",
       fontFamily:"inherit",
     }, extra || {});
   };
@@ -321,8 +400,8 @@ export default function HouseHuntingChecklist() {
       background:  sev===key?val.color:"transparent",
       border:      "1px solid " + (sev===key?val.color:"#30363d"),
       color:       sev===key?"#0d1117":val.color,
-      borderRadius:3, padding:"1px 6px", fontSize:9, cursor:"pointer",
-      letterSpacing:"0.04em", fontFamily:"inherit", fontWeight:sev===key?700:400,
+      borderRadius:4, padding:"4px 10px", fontSize:11, cursor:"pointer",
+      letterSpacing:"0.03em", fontFamily:"inherit", fontWeight:sev===key?700:400,
       display:     sev&&sev!==key?"none":"block",
     };
   };
@@ -333,41 +412,47 @@ export default function HouseHuntingChecklist() {
         <div style={S.hRow}>
           <div>
             <div style={S.hTitle}>
-              <span style={{ fontSize:22, color:"#00ff9d" }}>&#9654;</span>
+              <span style={{ fontSize:26, color:"#00ff9d" }}>&#9654;</span>
               <h1 style={S.h1}>HOUSE HUNTING CHECKLIST</h1>
             </div>
             <p style={S.subtitle}>{completedItems}/{totalItems} steps complete</p>
-            {editingName ? (
-              <input
-                autoFocus
-                value={propertyName}
-                onChange={function(e) { setPropertyName(e.target.value); }}
-                onBlur={function() { setEditingName(false); }}
-                onKeyDown={function(e) { if (e.key === "Enter") setEditingName(false); }}
-                placeholder="e.g. 14 Oak Lane, Guildford, GU1 3AA"
-                style={S.propInput}
-              />
-            ) : (
-              <div onClick={function() { setEditingName(true); }} style={S.propName}>
-                {propertyName || "Click to set property address..."}
-              </div>
-            )}
+
+            <div style={{ display:"flex", alignItems:"center", gap:10, marginTop:8, marginLeft:38 }}>
+              {editingName ? (
+                <input
+                  autoFocus
+                  value={propertyName}
+                  onChange={function(e) { setPropertyName(e.target.value); }}
+                  onBlur={function() { setEditingName(false); }}
+                  onKeyDown={function(e) { if (e.key === "Enter") setEditingName(false); }}
+                  placeholder="e.g. 14 Oak Lane, Guildford, GU1 3AA"
+                  style={{ fontSize:16, color:"#00ff9d", background:"#0d1117", border:"1px solid #30363d", borderRadius:6, fontFamily:"inherit", padding:"8px 12px", outline:"none", width:300, maxWidth:"50vw" }}
+                />
+              ) : (
+                <div onClick={function() { setEditingName(true); }} style={{ fontSize:16, color:"#00ff9d", cursor:"pointer", fontFamily:"inherit", letterSpacing:"0.02em" }}>
+                  {propertyName || "Click to set property address..."}
+                </div>
+              )}
+              <button onClick={function() { setShowPicker(true); }} style={{ background:"#21262d", border:"1px solid #30363d", color:"#00cfff", borderRadius:6, padding:"6px 14px", fontSize:13, cursor:"pointer", fontFamily:"inherit", letterSpacing:"0.04em", textTransform:"uppercase" }}>
+                {houses.length + " HOUSES"}
+              </button>
+            </div>
           </div>
           <div style={S.filterRow}>
             {["all","remaining","completed","findings"].map(function(f) {
               return <button key={f} onClick={function() { setFilter(f); }} style={filterBtn(f)}>{f}</button>;
             })}
             <button onClick={exportReport} style={actionBtn({ marginLeft:4, color:"#00cfff", borderColor:"#00cfff" })}>EXPORT</button>
-            <button onClick={resetAll} style={actionBtn({ marginLeft:4 })}>RESET HOUSE</button>
+            <button onClick={resetHouse} style={actionBtn({ marginLeft:4 })}>RESET</button>
           </div>
         </div>
         <div style={{ marginTop:20 }}>
-          <div style={{ height:3, background:"#21262d", borderRadius:2, overflow:"hidden" }}>
+          <div style={{ height:5, background:"#21262d", borderRadius:3, overflow:"hidden" }}>
             <div style={{ height:"100%", width: pct + "%", background:pct===100?"#00ff9d":"linear-gradient(90deg,#00ff9d,#00cfff)", transition:"width 0.4s ease", borderRadius:2 }} />
           </div>
-          <div style={{ display:"flex", justifyContent:"space-between", marginTop:6 }}>
-            <span style={{ fontSize:10, color:"#8b949e" }}>PROGRESS</span>
-            <span style={{ fontSize:10, color:pct===100?"#00ff9d":"#8b949e", fontWeight:700 }}>{pct}%</span>
+          <div style={{ display:"flex", justifyContent:"space-between", marginTop:8 }}>
+            <span style={{ fontSize:12, color:"#8b949e" }}>PROGRESS</span>
+            <span style={{ fontSize:12, color:pct===100?"#00ff9d":"#8b949e", fontWeight:700 }}>{pct}%</span>
           </div>
         </div>
       </div>
@@ -379,9 +464,9 @@ export default function HouseHuntingChecklist() {
           return (
             <div key={section.id} style={{ marginBottom:24 }}>
               <div onClick={function() { toggleSection(section.id); }} style={S.secHeader(section.color, isCollapsed)}>
-                <span style={{ color:section.color, fontSize:11, width:14 }}>{isCollapsed ? "\u25B6" : "\u25BC"}</span>
-                <span style={{ fontWeight:700, fontSize:13, color:"#f0f6fc", flex:1, letterSpacing:"0.05em", textTransform:"uppercase" }}>{section.label}</span>
-                <span style={{ fontSize:11, color:sCompleted===section.items.length?section.color:"#8b949e", background:"#21262d", padding:"2px 8px", borderRadius:10 }}>{sCompleted}/{section.items.length}</span>
+                <span style={{ color:section.color, fontSize:14, width:16 }}>{isCollapsed ? "\u25B6" : "\u25BC"}</span>
+                <span style={{ fontWeight:700, fontSize:16, color:"#f0f6fc", flex:1, letterSpacing:"0.04em", textTransform:"uppercase" }}>{section.label}</span>
+                <span style={{ fontSize:14, color:sCompleted===section.items.length?section.color:"#8b949e", background:"#21262d", padding:"4px 12px", borderRadius:12 }}>{sCompleted}/{section.items.length}</span>
               </div>
               {!isCollapsed && (
                 <div style={S.secBody}>
@@ -393,7 +478,7 @@ export default function HouseHuntingChecklist() {
                       <div key={item.id}>
                         <div onClick={function() { toggleItem(item.id); }} style={S.itemRow(isDone, idx)}>
                           <div style={S.checkbox(isDone, section.color)}>
-                            {isDone && <span style={{ color:"#0d1117", fontSize:10, fontWeight:900 }}>{"\u2713"}</span>}
+                            {isDone && <span style={{ color:"#0d1117", fontSize:14, fontWeight:900 }}>{"\u2713"}</span>}
                           </div>
                           <span style={S.itemText(isDone)}>{item.text}</span>
                           <div style={{ display:"flex", gap:6, alignItems:"flex-start", flexShrink:0 }} onClick={function(e) { e.stopPropagation(); }}>
@@ -401,7 +486,7 @@ export default function HouseHuntingChecklist() {
                               var key = entry[0]; var val = entry[1];
                               return <button key={key} onClick={function(e) { setSeverity(item.id, sev===key?null:key, e); }} title={val.label} style={sevBtn(key, val, sev)}>{key.toUpperCase()}</button>;
                             })}
-                            <button onClick={function(e) { openNote(item.id, e); }} style={{ background:hasNote?"#21262d":"transparent", border:"1px solid " + (hasNote?"#8b949e":"#30363d"), color:hasNote?"#f0f6fc":"#8b949e", borderRadius:3, padding:"1px 7px", fontSize:11, cursor:"pointer", fontFamily:"inherit" }}>{hasNote ? "\u270E" : "+"}</button>
+                            <button onClick={function(e) { openNote(item.id, e); }} style={{ background:hasNote?"#21262d":"transparent", border:"1px solid " + (hasNote?"#8b949e":"#30363d"), color:hasNote?"#f0f6fc":"#8b949e", borderRadius:4, padding:"4px 10px", fontSize:13, cursor:"pointer", fontFamily:"inherit" }}>{hasNote ? "\u270E" : "+"}</button>
                           </div>
                         </div>
                         {hasNote && <div style={S.noteRow}>{"\u21B3 " + hasNote}</div>}
@@ -422,11 +507,55 @@ export default function HouseHuntingChecklist() {
       {editingNote && (
         <div style={S.modal} onClick={function() { setEditingNote(null); }}>
           <div style={S.modalBox} onClick={function(e) { e.stopPropagation(); }}>
-            <p style={{ margin:"0 0 12px", fontSize:12, color:"#8b949e", textTransform:"uppercase", letterSpacing:"0.05em" }}>PROPERTY NOTE</p>
+            <p style={{ margin:"0 0 14px", fontSize:15, color:"#8b949e", textTransform:"uppercase", letterSpacing:"0.05em" }}>PROPERTY NOTE</p>
             <textarea value={noteText} onChange={function(e) { setNoteText(e.target.value); }} autoFocus placeholder="Enter the exact square metres, the boiler age, any dealbreakers, quotes from the agent..." style={S.textarea} />
-            <div style={{ display:"flex", gap:8, marginTop:12, justifyContent:"flex-end" }}>
-              <button onClick={function() { setEditingNote(null); }} style={{ background:"transparent", border:"1px solid #30363d", color:"#8b949e", padding:"6px 16px", borderRadius:4, cursor:"pointer", fontFamily:"inherit", fontSize:12 }}>Cancel</button>
-              <button onClick={saveNote} style={{ background:"#238636", border:"1px solid #2ea043", color:"#f0f6fc", padding:"6px 16px", borderRadius:4, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:700 }}>Save</button>
+            <div style={{ display:"flex", gap:10, marginTop:14, justifyContent:"flex-end" }}>
+              <button onClick={function() { setEditingNote(null); }} style={{ background:"transparent", border:"1px solid #30363d", color:"#8b949e", padding:"10px 20px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:14 }}>Cancel</button>
+              <button onClick={saveNote} style={{ background:"#238636", border:"1px solid #2ea043", color:"#f0f6fc", padding:"10px 20px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:700 }}>Save</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showPicker && (
+        <div style={S.modal} onClick={function() { setShowPicker(false); }}>
+          <div style={S.modalBox} onClick={function(e) { e.stopPropagation(); }}>
+            <p style={{ margin:"0 0 18px", fontSize:18, color:"#f0f6fc", fontWeight:700, textTransform:"uppercase", letterSpacing:"0.04em" }}>YOUR HOUSES</p>
+
+            <div style={{ maxHeight:300, overflowY:"auto", marginBottom:18 }}>
+              {houses.map(function(h) {
+                var isActive = h.id === activeId;
+                var prog = getProgress(h);
+                return (
+                  <div key={h.id} onClick={function() { switchHouse(h.id); }} style={{ display:"flex", alignItems:"center", gap:14, padding:"14px 16px", background:isActive?"#21262d":"#0d1117", border:"2px solid " + (isActive?"#00ff9d":"#21262d"), borderRadius:8, marginBottom:10, cursor:"pointer" }}>
+                    <div style={{ flex:1 }}>
+                      <div style={{ fontSize:16, color:isActive?"#00ff9d":"#e6edf3", fontWeight:isActive?700:400 }}>
+                        {h.propertyName || "Unnamed property"}
+                      </div>
+                      <div style={{ fontSize:13, color:"#8b949e", marginTop:3 }}>{prog + "% complete"}</div>
+                    </div>
+                    <div style={{ width:60, height:4, background:"#21262d", borderRadius:2, overflow:"hidden" }}>
+                      <div style={{ height:"100%", width:prog + "%", background:isActive?"#00ff9d":"#8b949e", borderRadius:2 }} />
+                    </div>
+                    <button onClick={function(e) { deleteHouse(h.id, e); }} title="Delete house" style={{ background:"transparent", border:"1px solid #30363d", color:"#ff4757", borderRadius:4, padding:"6px 12px", fontSize:12, cursor:"pointer", fontFamily:"inherit" }}>DEL</button>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div style={{ display:"flex", gap:10 }}>
+              <input
+                value={newName}
+                onChange={function(e) { setNewName(e.target.value); }}
+                onKeyDown={function(e) { if (e.key === "Enter") addHouse(); }}
+                placeholder="New house address..."
+                style={{ flex:1, fontSize:15, color:"#c9d1d9", background:"#0d1117", border:"1px solid #30363d", borderRadius:6, fontFamily:"inherit", padding:"10px 14px", outline:"none" }}
+              />
+              <button onClick={addHouse} style={{ background:"#238636", border:"1px solid #2ea043", color:"#f0f6fc", padding:"10px 20px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:700 }}>ADD</button>
+            </div>
+
+            <div style={{ display:"flex", justifyContent:"flex-end", marginTop:14 }}>
+              <button onClick={function() { setShowPicker(false); }} style={{ background:"transparent", border:"1px solid #30363d", color:"#8b949e", padding:"10px 20px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", fontSize:14 }}>Close</button>
             </div>
           </div>
         </div>
